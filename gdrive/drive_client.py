@@ -7,6 +7,9 @@ from typing import List
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
+from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.errors import HttpError
+
 
 from gdrive import settings, error
 
@@ -134,7 +137,7 @@ def create_folder(name: str, parent_id: str) -> str:
     existing = (
         service.files()
         .list(
-            q=f"name='{name}' and '{parent_id}' in parents",
+            q=f"name='{name}' and '{parent_id}' in parents and trashed=false",
             fields="files(id, name)",
             supportsAllDrives=True,
             includeItemsFromAllDrives=True,
@@ -161,7 +164,6 @@ def get_files(filename: str) -> List:
     """
     Get list of files by filename
     """
-
     results = (
         service.files()
         .list(
@@ -171,7 +173,6 @@ def get_files(filename: str) -> List:
         )
         .execute()
     )
-
     return results["files"]
 
 
@@ -230,3 +231,177 @@ def delete_file(id: str) -> None:
 
 def export(id: str) -> any:
     return service.files().get_media(fileId=id).execute()
+
+
+def get_labels(Id: str, count: int = 10) -> List:
+    page_token = None
+    labels = []
+    while True:
+        results = (
+            service.files()
+            .listLabels(fileId=Id, maxResults=count, pageToken=page_token)
+            .execute()
+        )
+
+        labels.extend(results.get("labels", []))
+        page_token = results.get("nextPageToken")
+
+        if not page_token:
+            break
+
+    return labels
+
+
+def edit_description(Id: str, text: List) -> List:
+    file_metadata = f"{text[0]}"
+    results = (
+        service.files()
+        .update(fileId=Id, supportsAllDrives=True, body=file_metadata)
+        .execute()
+    )
+
+    return (
+        service.files()
+        .get(fileId=Id, supportsAllDrives=True, fields="description, properties")
+        .execute()
+    )
+
+
+def get_files_by_query(query: str, driveId: str | None, fields: List | None = []):
+    """
+    Get list of files by query
+    """
+    files = []
+    page_token = None
+
+    service_input_args = {
+        "q": query,
+        "includeTeamDriveItems": True,
+        "supportsTeamDrives": True,
+    }
+
+    # if fields:
+    #     separator = ", "
+    #     fields_input = separator.join(map(str, fields))
+    # service_input_args.update({"fields": fields})
+
+    if driveId:
+        service_input_args.update({"corpora": "drive", "driveId": driveId})
+
+    while True:
+        results = service.files().list(**service_input_args).execute()
+
+        files.extend(results.get("files", []))
+        page_token = results.get("nextPageToken")
+
+        if not page_token:
+            break
+        else:
+            service_input_args.update({"pageToken": page_token})
+
+    return files
+
+    # breakpoint()
+    # if driveId:
+    #     results = ()
+    # else:
+    #     results = (
+    #         service.files()
+    #         .list(
+    #             q=query,
+    #             includeTeamDriveItems=True,
+    #             supportsTeamDrives=True,
+    #         )
+    #         .execute()
+    #     )
+
+    # return results["files"]
+
+
+def edit_metadata(Id: str, metadata: dict, fields: str):
+    return (
+        service.files()
+        .update(
+            fileId=Id,
+            supportsAllDrives=True,
+            body=metadata,
+            fields=fields,
+        )
+        .execute()
+    )
+
+
+def copy_file(
+    source_id: str,
+    destination_id: str,
+    new_name: str | None = None,
+    source_parent: str | None = None,
+):
+    """
+    Get list of files by filename
+    """
+    # Get source file information: name and parent
+    source_file = (
+        service.files()
+        .get(fileId=source_id, fields="parents, name", supportsAllDrives=True)
+        .execute()
+    )
+    new_name = source_file["name"]
+    current_location = source_file["parents"][0]
+
+    # Check if file already exists in destination
+    existing = (
+        service.files()
+        .list(
+            q=f"name contains '{new_name}' and '{destination_id}' in parents and trashed=false",
+            fields="files(id, name)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+        )
+        .execute()
+        .get("files", [])
+    )
+
+    if existing:
+        new_name = "".join((new_name, f"[{len(existing)}]"))
+
+    return (
+        service.files()
+        .copy(
+            fileId=source_id,
+            supportsAllDrives=True,
+            body={
+                "parents": [destination_id],
+                "name": new_name,
+            },
+        )
+        .execute()
+    )
+
+
+def download_file(file_id: str):
+    try:
+        request = service.files().get_media(fileId=file_id)
+        file = io.BytesIO()
+        downloader = MediaIoBaseDownload(file, request)
+        done = False
+
+        while done is False:
+            status, done = downloader.next_chunk()
+            print(f"Download {int(status.progress() * 100)}.")
+
+    except HttpError as error:
+        print(f"An error occurred: {error}")
+        file = None
+
+    return file.getvalue()
+
+
+def get_file(file_id: str, fields: str | None = None):
+    request = (
+        service.files()
+        .get(fileId=file_id, fields=fields, supportsAllDrives=True)
+        .execute()
+    )
+
+    return request

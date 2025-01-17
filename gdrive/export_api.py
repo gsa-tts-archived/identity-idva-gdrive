@@ -208,8 +208,78 @@ async def get_directories(request: ResourceModel):
     )
 
 
+class QueryModel(BaseModel):
+    query: str
+    driveId: str | None = None
+    fields: str | None = None
+
+
+@router.post("/export/query")
+async def get_files_by_query(request: QueryModel):
+    return responses.JSONResponse(
+        status_code=202,
+        content=drive_client.get_files_by_query(
+            query=request.query, driveId=request.driveId, fields=request.fields
+        ),
+    )
+
+
 @router.post("/export/resource")
 async def export_resource(request: ResourceModel):
     return responses.Response(
         status_code=202, content=drive_client.export(request.resourceId)
     )
+
+
+@router.post("/export/labels")
+async def list_labels(request: InteractionModel):
+    """
+    Get list of file labels
+    """
+
+    try:
+        files = drive_client.get_files(request.interactionId)
+        if files:
+            for file in files:
+                label_response = drive_client.get_labels(file["id"])
+                return responses.JSONResponse(status_code=202, content=label_response)
+        else:
+            return responses.JSONResponse(status_code=404, content="no file")
+    except:
+        return responses.JSONResponse(status_code=404, content="exception")
+
+
+class AddDescriptionModel(BaseModel):
+    """
+    Request body format for the `/description` endpoint
+    """
+
+    field: list[str] | None = None
+    interactionId: str | list[str]
+    values: list[str] = Field(..., min_items=1)
+
+
+class AddMetadataModel(BaseModel):
+    """
+    Request body format for the `/metadata` endpoint
+    """
+
+    fileId: list[str] = Field(..., min_items=1)
+    metadata: dict
+    fields: str | None = None
+
+
+@router.post("/export/metadata")
+async def add_metadata(request: AddMetadataModel):
+    """
+    Add text to file description
+    """
+    results = []
+
+    for currentId in request.fileId:
+        output = drive_client.edit_metadata(
+            Id=currentId, metadata=request.metadata, fields=request.fields
+        )
+        results.append(output)
+
+    return responses.JSONResponse(status_code=202, content=results)
